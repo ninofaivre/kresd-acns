@@ -34,6 +34,7 @@ function M.addRules(rules)
   end
 end
 
+-- TODO clean this mess
 function M.config(conf)
   if conf == nil then
     config = { rules = {}, perfStats = false }
@@ -42,6 +43,7 @@ function M.config(conf)
   if conf.socketPath ~= nil then config.servSocketPath = conf.socketPath end
   if conf.rules ~= nil then config.rules = conf.rules end
   if conf.perfStats ~= nil then config.perfStats = conf.perfStats end
+  if conf.debug ~= nil then config.debug = true end
 
   if conf.unixSocketAccessGroupName ~= nil then
     local group = assert(
@@ -54,15 +56,19 @@ end
 
 local function insert (answer, nftPath)
   for _, rr in ipairs(answer) do
-    if rr.type == kres.type.A or rr.type == kres.type.AAAA then
-      local message = string.char((nftPath.family % 256), math.floor(nftPath.family / 256)) .. nftPath.tableName .. "\0" .. nftPath.setName .. "\0" .. rr.rdata
+    if nftPath[rr.type] ~= nil and nftPath[rr.type].enabled == true then
+      local family = nftPath[rr.type].family or nftPath.family
+      local tableName = nftPath[rr.type].tableName or nftPath.tableName
+      local setName = nftPath[rr.type].setName or nftPath.setName
+
+      local message = string.char((family % 256), math.floor(family / 256)) .. tableName .. "\0" .. setName .. "\0" .. rr.rdata
       if (socket:sendto(message, config.servSocketPath)) then
         local res = Acns.parseResponse(socket:receive())
         -- TODO use kres log utilities
         if (res == Acns.Responses.WRONG) then
           print("acns: problem receiving message")
         elseif (res == Acns.Responses.KO) then
-          print("acns: ack KO for family[" .. nftPath.family .. "] -> tableName[" .. nftPath.tableName .. "] -> setName [" .. nftPath.setName .. "]")
+          print("acns: ack KO for family[" .. family .. "] -> tableName[" .. tableName .. "] -> setName [" .. setName .. "]")
         end
       else
         print("acns: problem sending message")
@@ -81,9 +87,9 @@ M.layer = {
     end
 
     local x, flag
+    flag = false
     if config.perfStats then
       x = os.clock()
-      flag = false
     end
 
     local initialQuery = req:initial()
@@ -91,12 +97,21 @@ M.layer = {
     for _, rule in ipairs(config.rules) do
       local nftPath = rule(req, initialQuery)
       if nftPath ~= nil then
+        if config.debug == true then
+          io.stderr:write("acns : debug : rule matched : initialQuery.sname :", kres.dname2str(initialQuery.sname), "\n")
+          io.stderr:flush();
+        end
         flag = true
         insert(answer, nftPath)
       end
     end
+    if (flag == false and config.debug == true) then
+      io.stderr:write("acns : debug : rule did not matched : initialQuery.sname :", kres.dname2str(initialQuery.sname), "\n")
+      io.stderr:flush();
+    end
     if (config.perfStats and flag) then
-      print(string.format("acns slowed down this query by : %.6f second\n", os.clock() - x))
+      io.stderr:write(string.format("acns slowed down this query by : %.6f second\n", os.clock() - x), "\n")
+      io.stderr:flush();
     end
   end
 }
